@@ -859,13 +859,6 @@
                         </li>
                     </ul>
                 </div>
-
-                <div class="info-note" style="margin-top: 20px; padding: 15px; background: rgba(99, 102, 241, 0.1); border-radius: var(--border-radius-sm); border-right: 4px solid var(--primary);">
-                    <p style="color: var(--text-secondary); font-size: 0.9rem;">
-                        <i class="fas fa-info-circle"></i>
-                        ملاحظة: التوثيق يكون بإضافة حقل <code>verified: true</code> في قاعدة البيانات للمستخدم المراد توثيقه
-                    </p>
-                </div>
             </div>
         </div>
     </div>
@@ -961,10 +954,6 @@
                     لتوثيق مستخدم، يجب على المسؤول إضافة حقل <code>verified: true</code>
                     في قاعدة البيانات باسم المستخدم المراد توثيقه.
                 </p>
-                <p style="font-size: 0.9rem; color: var(--text-muted);">
-                    <i class="fas fa-info-circle"></i>
-                    لا يمكن للمستخدمين توثيق أنفسهم. هذا النظام للحفاظ على مصداقية المحادثة.
-                </p>
             </div>
             <div class="modal-buttons">
                 <button id="cancelVerifyBtn" class="btn-secondary">
@@ -976,8 +965,23 @@
 
     <!-- Firebase SDK -->
     <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js";
-        import { getDatabase, ref, push, onValue, set, onDisconnect, serverTimestamp, query, orderByChild, equalTo, get } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-database.js";
+        // استيراد Firebase SDK
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { 
+            getDatabase, 
+            ref, 
+            push, 
+            onValue, 
+            set, 
+            onDisconnect, 
+            serverTimestamp, 
+            query, 
+            orderByChild, 
+            equalTo, 
+            get,
+            update,
+            remove
+        } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
         const firebaseConfig = {
             apiKey: "AIzaSyAWQG3PJTM85pjMW6FNZLUAUI4ymYhVsWA",
@@ -990,15 +994,18 @@
             measurementId: "G-9HC488E49Q"
         };
 
+        // تهيئة Firebase
         const app = initializeApp(firebaseConfig);
         const database = getDatabase(app);
 
-        // تخزين Firebase كمتغيرات عامة للوصول السهل
+        // تصدير الدوال للاستخدام العالمي
         window.firebaseDatabase = database;
         window.firebaseRef = ref;
         window.firebasePush = push;
         window.firebaseOnValue = onValue;
         window.firebaseSet = set;
+        window.firebaseUpdate = update;
+        window.firebaseRemove = remove;
         window.firebaseServerTimestamp = serverTimestamp;
         window.firebaseQuery = query;
         window.firebaseOrderByChild = orderByChild;
@@ -1010,11 +1017,11 @@
         // ===== المتغيرات العامة =====
         let currentUser = null;
         let isVerified = false;
-        let onlineUsers = new Set();
         let usedUsernames = new Set();
         let messagesRef = null;
         let usersRef = null;
         let onlineRef = null;
+        let userOnlineRef = null;
 
         // ===== عناصر DOM =====
         const usernameScreen = document.getElementById('usernameScreen');
@@ -1037,13 +1044,26 @@
         // ===== تهيئة التطبيق =====
         document.addEventListener('DOMContentLoaded', () => {
             initializeEventListeners();
-            loadUsedUsernames();
+            checkConnection();
         });
+
+        // ===== التحقق من الاتصال =====
+        function checkConnection() {
+            const connectionRef = window.firebaseRef(window.firebaseDatabase, '.info/connected');
+            
+            window.firebaseOnValue(connectionRef, (snap) => {
+                if (snap.val() === true) {
+                    console.log('✅ متصل بـ Firebase بنجاح');
+                } else {
+                    console.log('❌ غير متصل بـ Firebase');
+                }
+            });
+        }
 
         // ===== إدارة المستخدمين والأسماء =====
         async function loadUsedUsernames() {
             try {
-                const usersRef = ref(window.firebaseDatabase, 'users');
+                const usersRef = window.firebaseRef(window.firebaseDatabase, 'users');
                 const snapshot = await window.firebaseGet(usersRef);
                 
                 if (snapshot.exists()) {
@@ -1056,24 +1076,22 @@
                             usedUsernames.add(username.toLowerCase());
                         }
                     }
-                    console.log('الأسماء المستخدمة:', Array.from(usedUsernames));
+                    console.log('📋 الأسماء المستخدمة:', Array.from(usedUsernames));
                 }
             } catch (error) {
-                console.error('خطأ في تحميل الأسماء:', error);
-                showNotification('تحميل الأسماء المستخدمة', 'warning');
+                console.error('❌ خطأ في تحميل الأسماء:', error);
+                showNotification('خطأ في تحميل البيانات', 'error');
             }
         }
 
         function validateUsername(username) {
             username = username.trim();
             
-            // التحقق من عدم الفراغ
             if (!username) {
                 showError('اسم المستخدم مطلوب');
                 return false;
             }
             
-            // التحقق من الطول
             if (username.length < 2) {
                 showError('الاسم يجب أن يكون على الأقل حرفين');
                 return false;
@@ -1084,14 +1102,12 @@
                 return false;
             }
             
-            // التحقق من الحروف المسموحة
             const arabicRegex = /^[\u0600-\u06FF\s0-9]+$/;
             if (!arabicRegex.test(username)) {
                 showError('اسم المستخدم يجب أن يحتوي على حروف عربية وأرقام فقط');
                 return false;
             }
             
-            // التحقق من عدم استخدام الاسم من قبل
             if (usedUsernames.has(username.toLowerCase())) {
                 showError('هذا الاسم مستخدم من قبل، يرجى اختيار اسم آخر');
                 return false;
@@ -1115,13 +1131,11 @@
 
         // ===== إدارة الشات =====
         function initializeEventListeners() {
-            // زر الدخول
             enterChatBtn.addEventListener('click', enterChat);
             usernameInput.addEventListener('keypress', (e) => {
                 if (e.key === 'Enter') enterChat();
             });
 
-            // إرسال الرسائل
             sendBtn.addEventListener('click', sendMessage);
             messageInput.addEventListener('keypress', (e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
@@ -1130,10 +1144,8 @@
                 }
             });
 
-            // عدّ الأحرف
             messageInput.addEventListener('input', updateCharCount);
 
-            // الأزرار
             backBtn.addEventListener('click', () => {
                 if (confirm('هل تريد الخروج من الشات؟ سيتم تسجيل خروجك.')) {
                     logout();
@@ -1147,12 +1159,10 @@
                 showNotification('تم تحديث المحادثة', 'success');
             });
 
-            // نافذة التوثيق
             cancelVerifyBtn.addEventListener('click', () => {
                 verificationModal.classList.remove('active');
             });
 
-            // إظهار معلومات التوثيق عند النقر على البادج
             verifiedBadge.addEventListener('click', (e) => {
                 e.stopPropagation();
                 verificationModal.classList.add('active');
@@ -1167,67 +1177,75 @@
             }
 
             try {
-                // حفظ المستخدم في قاعدة البيانات
-                const userRef = ref(window.firebaseDatabase, `users/${username}`);
-                const userSnapshot = await window.firebaseGet(userRef);
+                await loadUsedUsernames();
                 
-                if (userSnapshot.exists()) {
+                if (usedUsernames.has(username.toLowerCase())) {
                     showError('هذا الاسم مستخدم من قبل، يرجى اختيار اسم آخر');
                     return;
                 }
 
-                // إنشاء المستخدم
-                await window.firebaseSet(userRef, {
-                    username: username,
-                    joinedAt: window.firebaseServerTimestamp(),
-                    lastSeen: window.firebaseServerTimestamp(),
-                    verified: false
-                });
-
-                // تعيين المستخدم الحالي
                 currentUser = username;
                 currentUsernameSpan.textContent = username;
                 
-                // التحقق من التوثيق
-                checkVerification();
-                
-                // تبديل الشاشات
                 usernameScreen.classList.remove('active');
                 chatScreen.classList.add('active');
                 
-                // تهيئة الشات
                 initializeChat();
                 
-                // إظهار رسالة ترحيب
                 showNotification(`مرحباً ${username}!`, 'success');
                 
-                // إضافة الاسم للمستخدمين
                 usedUsernames.add(username.toLowerCase());
 
             } catch (error) {
-                console.error('خطأ في الدخول:', error);
+                console.error('❌ خطأ في الدخول:', error);
                 showError('حدث خطأ في الاتصال، حاول مرة أخرى');
             }
         }
 
-        function initializeChat() {
-            // إعداد مراجع Firebase
-            messagesRef = ref(window.firebaseDatabase, 'messages');
-            usersRef = ref(window.firebaseDatabase, 'users');
-            onlineRef = ref(window.firebaseDatabase, `online/${currentUser}`);
+        async function initializeChat() {
+            try {
+                messagesRef = window.firebaseRef(window.firebaseDatabase, 'messages');
+                usersRef = window.firebaseRef(window.firebaseDatabase, 'users');
+                onlineRef = window.firebaseRef(window.firebaseDatabase, 'online');
+                userOnlineRef = window.firebaseRef(window.firebaseDatabase, `online/${currentUser}`);
 
-            // تحديث حالة الاتصال
-            window.firebaseSet(onlineRef, true);
-            window.firebaseOnDisconnect(onlineRef).remove();
+                await saveUserToDatabase();
+                
+                await window.firebaseSet(userOnlineRef, {
+                    username: currentUser,
+                    joinedAt: Date.now(),
+                    isOnline: true
+                });
 
-            // تحميل الرسائل
-            loadMessages();
+                window.firebaseOnDisconnect(userOnlineRef).remove();
+                
+                loadMessages();
+                monitorOnlineUsers();
+                checkVerification();
+                
+                setTimeout(() => messageInput.focus(), 500);
+                
+            } catch (error) {
+                console.error('❌ خطأ في تهيئة الشات:', error);
+                showNotification('خطأ في تهيئة المحادثة', 'error');
+            }
+        }
 
-            // مراقبة المستخدمين المتصلين
-            monitorOnlineUsers();
-
-            // التركيز على حقل الرسائل
-            setTimeout(() => messageInput.focus(), 500);
+        async function saveUserToDatabase() {
+            try {
+                const userRef = window.firebaseRef(window.firebaseDatabase, `users/${currentUser}`);
+                
+                await window.firebaseSet(userRef, {
+                    username: currentUser,
+                    joinedAt: Date.now(),
+                    lastSeen: Date.now(),
+                    verified: false,
+                    messageCount: 0
+                });
+                
+            } catch (error) {
+                console.error('❌ خطأ في حفظ المستخدم:', error);
+            }
         }
 
         function loadMessages() {
@@ -1238,7 +1256,8 @@
 
             window.firebaseOnValue(messagesQuery, (snapshot) => {
                 if (snapshot.exists()) {
-                    messagesContainer.innerHTML = '';
+                    messagesContainer.innerHTML = '<div class="welcome-message"><div class="message received"><div class="message-header"><div class="message-sender"><i class="fas fa-robot"></i><span>مرحباً بك في FREE CHAT</span></div></div><div class="message-content">ابدأ المحادثة الآن! أرسل رسالتك الأولى لتظهر هنا.</div><div class="message-status"><i class="fas fa-clock"></i> الآن</div></div></div>';
+                    
                     const messages = snapshot.val();
                     const messageArray = [];
 
@@ -1249,32 +1268,32 @@
                         });
                     }
 
-                    // ترتيب الرسائل حسب الوقت
                     messageArray.sort((a, b) => a.timestamp - b.timestamp);
 
-                    // عرض الرسائل
                     messageArray.forEach(message => {
                         addMessageToUI(message);
                     });
 
-                    // التمرير للأسفل
                     scrollToBottom();
                 }
+            }, (error) => {
+                console.error('❌ خطأ في تحميل الرسائل:', error);
+                showNotification('خطأ في تحميل الرسائل', 'error');
             });
         }
 
         function addMessageToUI(message) {
+            if (!message.sender || !message.text) return;
+            
             const messageElement = document.createElement('div');
             messageElement.className = `message ${message.sender === currentUser ? 'sent' : 'received'}`;
             
-            // تنسيق الوقت
             const time = new Date(message.timestamp);
             const timeString = time.toLocaleTimeString('ar-EG', {
                 hour: '2-digit',
                 minute: '2-digit'
             });
 
-            // التحقق من توثيق المرسل
             const isSenderVerified = message.verified || false;
             const verifiedIcon = isSenderVerified ? 
                 '<span class="verified-badge" style="font-size: 0.8em; margin-right: 5px;"><i class="fas fa-check-circle"></i></span>' : '';
@@ -1296,7 +1315,6 @@
 
             messagesContainer.appendChild(messageElement);
             
-            // تأثير الوصول للرسالة
             setTimeout(() => {
                 messageElement.style.opacity = '1';
                 messageElement.style.transform = 'translateY(0)';
@@ -1313,7 +1331,6 @@
             }
 
             try {
-                // إرسال الرسالة
                 const newMessageRef = window.firebasePush(messagesRef);
                 await window.firebaseSet(newMessageRef, {
                     sender: currentUser,
@@ -1322,39 +1339,59 @@
                     verified: isVerified
                 });
 
-                // مسح حقل الإدخال
                 messageInput.value = '';
                 updateCharCount();
                 
-                // تأثير الإرسال
                 sendBtn.classList.add('fa-beat');
                 setTimeout(() => sendBtn.classList.remove('fa-beat'), 300);
 
-                // التمرير للأسفل
                 scrollToBottom();
 
+                updateUserMessageCount();
+
             } catch (error) {
-                console.error('خطأ في إرسال الرسالة:', error);
+                console.error('❌ خطأ في إرسال الرسالة:', error);
                 showNotification('فشل إرسال الرسالة', 'error');
             }
         }
 
+        async function updateUserMessageCount() {
+            try {
+                const userRef = window.firebaseRef(window.firebaseDatabase, `users/${currentUser}`);
+                const snapshot = await window.firebaseGet(userRef);
+                
+                if (snapshot.exists()) {
+                    const userData = snapshot.val();
+                    const currentCount = userData.messageCount || 0;
+                    
+                    await window.firebaseUpdate(userRef, {
+                        messageCount: currentCount + 1,
+                        lastSeen: Date.now()
+                    });
+                }
+            } catch (error) {
+                console.error('❌ خطأ في تحديث عدد الرسائل:', error);
+            }
+        }
+
         function monitorOnlineUsers() {
-            const onlineRef = ref(window.firebaseDatabase, 'online');
-            
             window.firebaseOnValue(onlineRef, (snapshot) => {
                 if (snapshot.exists()) {
-                    const onlineUsers = Object.keys(snapshot.val());
-                    onlineCountSpan.textContent = onlineUsers.length;
+                    const onlineUsers = snapshot.val();
+                    const onlineCount = Object.keys(onlineUsers).length;
+                    onlineCountSpan.textContent = onlineCount;
                 } else {
                     onlineCountSpan.textContent = '0';
                 }
+            }, (error) => {
+                console.error('❌ خطأ في مراقبة المستخدمين:', error);
+                onlineCountSpan.textContent = '0';
             });
         }
 
         async function checkVerification() {
             try {
-                const userRef = ref(window.firebaseDatabase, `users/${currentUser}`);
+                const userRef = window.firebaseRef(window.firebaseDatabase, `users/${currentUser}`);
                 const snapshot = await window.firebaseGet(userRef);
                 
                 if (snapshot.exists() && snapshot.val().verified === true) {
@@ -1366,7 +1403,9 @@
                     verifiedBadge.classList.add('hidden');
                 }
             } catch (error) {
-                console.error('خطأ في التحقق من التوثيق:', error);
+                console.error('❌ خطأ في التحقق من التوثيق:', error);
+                isVerified = false;
+                verifiedBadge.classList.add('hidden');
             }
         }
 
@@ -1389,29 +1428,31 @@
             }, 100);
         }
 
-        function logout() {
-            if (currentUser && onlineRef) {
-                window.firebaseSet(onlineRef, null);
+        async function logout() {
+            try {
+                if (currentUser && userOnlineRef) {
+                    await window.firebaseRemove(userOnlineRef);
+                }
+                
+                chatScreen.classList.remove('active');
+                usernameScreen.classList.add('active');
+                
+                currentUser = null;
+                usernameInput.value = '';
+                messageInput.value = '';
+                updateCharCount();
+                
+                await loadUsedUsernames();
+                
+                showNotification('تم تسجيل الخروج', 'info');
+                
+            } catch (error) {
+                console.error('❌ خطأ في تسجيل الخروج:', error);
+                showNotification('خطأ في تسجيل الخروج', 'error');
             }
-            
-            // العودة لشاشة الاسم
-            chatScreen.classList.remove('active');
-            usernameScreen.classList.add('active');
-            
-            // إعادة تعيين البيانات
-            currentUser = null;
-            usernameInput.value = '';
-            messageInput.value = '';
-            updateCharCount();
-            
-            // تحديث الأسماء المستخدمة
-            loadUsedUsernames();
-            
-            showNotification('تم تسجيل الخروج', 'info');
         }
 
         function showNotification(message, type = 'info') {
-            // إنشاء عنصر الإشعار
             const notification = document.createElement('div');
             notification.className = 'notification';
             
@@ -1425,10 +1466,8 @@
                 <span>${message}</span>
             `;
             
-            // إضافة للإشعارات
             document.body.appendChild(notification);
             
-            // إزالة بعد 3 ثواني
             setTimeout(() => {
                 notification.style.opacity = '0';
                 notification.style.transform = 'translateY(-20px)';
@@ -1437,19 +1476,16 @@
         }
 
         // ===== تحسينات للواجهة =====
-        // تحديث تلقائي للتوثيق كل 30 ثانية
         setInterval(() => {
             if (currentUser) {
                 checkVerification();
             }
         }, 30000);
 
-        // تحديث الأسماء المستخدمة كل دقيقة
         setInterval(() => {
             loadUsedUsernames();
         }, 60000);
 
-        // عرض النصائح بشكل عشوائي
         const tips = [
             '💡 يمكنك الضغط على علامة التوثيق لمعرفة المزيد عنها',
             '📱 التطبيق متجاوب مع جميع أحجام الشاشات',
@@ -1465,7 +1501,6 @@
             }
         }, 30000);
 
-        // ===== دعم وضع عدم الاتصال =====
         window.addEventListener('online', () => {
             showNotification('تم استعادة الاتصال', 'success');
             if (currentUser) {
@@ -1477,9 +1512,11 @@
             showNotification('فقدت الاتصال بالإنترنت', 'warning');
         });
 
-        // ===== جعل الوظائف متاحة عالمياً =====
         window.logout = logout;
         window.checkVerification = checkVerification;
+
+        // تحميل الأسماء عند بدء التشغيل
+        loadUsedUsernames();
     </script>
 </body>
-</html>
+    </html>
